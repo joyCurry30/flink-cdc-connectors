@@ -61,6 +61,7 @@ import io.debezium.connector.mysql.MySqlConnection;
 import io.debezium.connector.mysql.MySqlPartition;
 import io.debezium.document.Array;
 import io.debezium.jdbc.JdbcConnection;
+import io.debezium.relational.Column;
 import io.debezium.relational.TableId;
 import io.debezium.relational.history.HistoryRecord;
 import io.debezium.relational.history.TableChanges;
@@ -534,6 +535,47 @@ class MySqlSourceReaderTest extends MySqlSourceTestBase {
             }
         }
         reader.close();
+    }
+
+    @Test
+    void testDiscoverTableSchemasForBinlogSplit() throws Exception {
+        customerDatabase.createAndInitialize();
+        MySqlSourceConfig sourceConfig = getConfig(new String[] {"customers"});
+
+        String dbName = customerDatabase.getDatabaseName();
+        TableId customersTable = new TableId(dbName, null, "customers");
+
+        try (MySqlSourceReader<SourceRecord> reader = createReader(sourceConfig, -1);
+                MySqlConnection conn = DebeziumUtils.createMySqlConnection(sourceConfig)) {
+
+            MySqlBinlogSplit emptySplit =
+                    MySqlBinlogSplit.fillTableSchemas(
+                            createBinlogSplit(sourceConfig).asBinlogSplit(),
+                            Collections.emptyMap());
+            MySqlBinlogSplit initializedSplit =
+                    reader.discoverTableSchemasForBinlogSplit(emptySplit, sourceConfig, false);
+            Assertions.assertThat(initializedSplit.getTableSchemas())
+                    .hasSize(1)
+                    .containsKey(customersTable);
+
+            conn.execute("CREATE TABLE " + dbName + ".customers_new LIKE " + dbName + ".customers");
+            TableId newTable = new TableId(dbName, null, "customers_new");
+
+            MySqlBinlogSplit updatedSplit =
+                    reader.discoverTableSchemasForBinlogSplit(initializedSplit, sourceConfig, true);
+            Assertions.assertThat(updatedSplit.getTableSchemas())
+                    .hasSize(2)
+                    .containsKeys(customersTable, newTable);
+
+            conn.execute("ALTER TABLE " + dbName + ".customers ADD COLUMN age INT");
+            MySqlBinlogSplit alteredSplit =
+                    reader.discoverTableSchemasForBinlogSplit(updatedSplit, sourceConfig, true);
+
+            TableChanges.TableChange schema = alteredSplit.getTableSchemas().get(customersTable);
+            Assertions.assertThat(schema.getTable().columns())
+                    .extracting(Column::name)
+                    .contains("age");
+        }
     }
 
     private MySqlSourceReader<SourceRecord> createReader(MySqlSourceConfig configuration, int limit)

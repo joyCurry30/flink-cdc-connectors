@@ -35,7 +35,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 /** Utilities to discovery matched tables. */
 public class TableDiscoveryUtils {
@@ -114,29 +113,6 @@ public class TableDiscoveryUtils {
             throw new FlinkRuntimeException("Failed to discover captured tables", e);
         }
         return discoverSchemaForCapturedTables(partition, capturedTableIds, sourceConfig, jdbc);
-    }
-
-    public static Map<TableId, TableChange> discoverSchemaForNewAddedTables(
-            MySqlPartition partition,
-            List<TableId> existedTables,
-            MySqlSourceConfig sourceConfig,
-            MySqlConnection jdbc) {
-        final List<TableId> capturedTableIds;
-        try {
-            capturedTableIds =
-                    listTables(
-                                    jdbc,
-                                    sourceConfig.getDatabaseFilter(),
-                                    sourceConfig.getTableFilter())
-                            .stream()
-                            .filter(tableId -> !existedTables.contains(tableId))
-                            .collect(Collectors.toList());
-        } catch (SQLException e) {
-            throw new FlinkRuntimeException("Failed to discover captured tables", e);
-        }
-        return capturedTableIds.isEmpty()
-                ? new HashMap<>()
-                : discoverSchemaForCapturedTables(partition, capturedTableIds, sourceConfig, jdbc);
     }
 
     public static Map<TableId, TableChange> discoverSchemaForCapturedTables(

@@ -457,45 +457,117 @@ public class MySqlSourceReader<T>
         }
     }
 
-    private MySqlBinlogSplit discoverTableSchemasForBinlogSplit(
+    @VisibleForTesting
+    public MySqlBinlogSplit discoverTableSchemasForBinlogSplit(
             MySqlBinlogSplit split,
             MySqlSourceConfig sourceConfig,
             boolean checkNewlyAddedTableSchema) {
-        if (split.getTableSchemas().isEmpty() || checkNewlyAddedTableSchema) {
-            try (MySqlConnection jdbc = DebeziumUtils.createMySqlConnection(sourceConfig)) {
-                Map<TableId, TableChanges.TableChange> tableSchemas;
-                if (split.getTableSchemas().isEmpty()) {
-                    tableSchemas =
-                            TableDiscoveryUtils.discoverSchemaForCapturedTables(
-                                    partition, sourceConfig, jdbc);
-                    LOG.info(
-                            "Source reader {} discovers table schema for binlog split {} success",
-                            subtaskId,
-                            split.splitId());
-                } else {
-                    List<TableId> existedTables = new ArrayList<>(split.getTableSchemas().keySet());
-                    tableSchemas =
-                            TableDiscoveryUtils.discoverSchemaForNewAddedTables(
-                                    partition, existedTables, sourceConfig, jdbc);
-                    LOG.info(
-                            "Source reader {} discovers table schema for new added tables of binlog split {} success",
-                            subtaskId,
-                            split.splitId());
-                }
-                return MySqlBinlogSplit.fillTableSchemas(split, tableSchemas);
-            } catch (SQLException e) {
-                LOG.error(
-                        "Source reader {} failed to obtains table schemas due to {}",
-                        subtaskId,
-                        e.getMessage());
-                throw new FlinkRuntimeException(e);
-            }
-        } else {
-            LOG.warn(
-                    "Source reader {} skip the table schema discovery, the binlog split {} has table schemas yet.",
+        if (split.getTableSchemas().isEmpty()) {
+            return discoverInitialSchemas(split, sourceConfig);
+        }
+
+        if (checkNewlyAddedTableSchema) {
+            return discoverSchemasForNewTables(split, sourceConfig);
+        }
+
+        LOG.debug(
+                "Source reader {} skips schema discovery for binlog split {}",
+                subtaskId,
+                split.splitId());
+        return split;
+    }
+
+    /** Discovers table schemas for all captured tables when initializing a new binlog split. */
+    private MySqlBinlogSplit discoverInitialSchemas(
+            MySqlBinlogSplit split, MySqlSourceConfig sourceConfig) {
+
+        try (MySqlConnection jdbc = DebeziumUtils.createMySqlConnection(sourceConfig)) {
+            Map<TableId, TableChanges.TableChange> tableSchemas =
+                    TableDiscoveryUtils.discoverSchemaForCapturedTables(
+                            partition, sourceConfig, jdbc);
+
+            LOG.info(
+                    "Source reader {} discovers table schema for binlog split {} success",
                     subtaskId,
-                    split);
+                    split.splitId());
+
+            return MySqlBinlogSplit.fillTableSchemas(split, tableSchemas);
+        } catch (SQLException e) {
+            LOG.error(
+                    "Source reader {} failed to obtain initial table schemas due to {}",
+                    subtaskId,
+                    e.getMessage());
+            throw new FlinkRuntimeException(e);
+        }
+    }
+
+    /**
+     * Discovers and merges table schemas for newly added or modified tables during the binlog
+     * reading phase.
+     */
+    private MySqlBinlogSplit discoverSchemasForNewTables(
+            MySqlBinlogSplit split, MySqlSourceConfig sourceConfig) {
+
+        try (MySqlConnection jdbc = DebeziumUtils.createMySqlConnection(sourceConfig)) {
+            Map<TableId, TableChanges.TableChange> currentSchemas =
+                    TableDiscoveryUtils.discoverSchemaForCapturedTables(
+                            partition, sourceConfig, jdbc);
+
+            Map<TableId, TableChanges.TableChange> mergedSchemas =
+                    new HashMap<>(split.getTableSchemas());
+            Set<TableId> knownTableIds = split.getTableSchemas().keySet();
+
+            boolean updated = false;
+            for (Map.Entry<TableId, TableChanges.TableChange> entry : currentSchemas.entrySet()) {
+                TableId tableId = entry.getKey();
+                TableChanges.TableChange newChange = entry.getValue();
+                TableChanges.TableChange existingChange = mergedSchemas.get(tableId);
+
+                switch (newChange.getType()) {
+                    case CREATE:
+                        if (!mergedSchemas.containsKey(tableId)) {
+                            mergedSchemas.put(tableId, newChange);
+                            updated = true;
+                            LOG.info("Discovered new table schema: {}", tableId);
+                        }
+                        break;
+
+                    case ALTER:
+                        if (existingChange == null || !existingChange.equals(newChange)) {
+                            mergedSchemas.put(tableId, newChange);
+                            updated = true;
+                            LOG.info("Detected schema ALTER for table: {}", tableId);
+                        }
+                        break;
+
+                    case DROP:
+                        LOG.info("Detected DROP table {}, skipping schema update.", tableId);
+                        break;
+
+                    default:
+                        LOG.debug(
+                                "Detected unknown schema change type for table {}: {}",
+                                tableId,
+                                newChange.getType());
+                }
+            }
+
+            if (updated) {
+                LOG.info(
+                        "Source reader {} updated schemas for binlog split {}. New tables: {}",
+                        subtaskId,
+                        split.splitId(),
+                        mergedSchemas.keySet().stream()
+                                .filter(id -> !knownTableIds.contains(id))
+                                .collect(Collectors.toList()));
+                return MySqlBinlogSplit.fillTableSchemas(split, mergedSchemas);
+            }
+
+            LOG.debug("No new table schemas discovered for binlog split {}", split.splitId());
             return split;
+        } catch (SQLException e) {
+            LOG.error("Failed to discover schema changes for new tables", e);
+            throw new FlinkRuntimeException(e);
         }
     }
 
