@@ -57,7 +57,10 @@ SINKS = {
   paimon: Paimon,
   doris: Doris,
   starrocks: StarRocks,
-  values: ValuesSink
+  values: ValuesSink,
+  elasticsearch: ElasticSearch,
+  oceanbase: OceanBase,
+  maxcompute: MaxCompute
 }.freeze
 
 FLINK_VERSIONS = %w[
@@ -74,6 +77,8 @@ FLINK_CDC_VERSIONS = %w[
   3.1.1
   3.2.0
   3.2.1
+  3.3.0
+  3.4.0
 ].freeze
 
 puts

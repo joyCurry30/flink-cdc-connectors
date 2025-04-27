@@ -579,7 +579,7 @@ limitations under the License.
                             see https://issues.apache.org/jira/browse/MSHADE-284 -->
                             <shadeTestJar>false</shadeTestJar>
                             <shadedArtifactAttached>false</shadedArtifactAttached>
-                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
                             <filters combine.children="append">
                                 <filter>
                                     <artifact>*:*</artifact>
