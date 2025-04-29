@@ -101,7 +101,10 @@ public class CliFrontend {
 
         // Load Flink environment
         Path flinkHome = getFlinkHome(commandLine);
-        Configuration configuration = FlinkEnvironmentUtils.loadFlinkConfiguration(flinkHome);
+        Configuration configuration =
+                flinkHome == null
+                        ? new Configuration()
+                        : FlinkEnvironmentUtils.loadFlinkConfiguration(flinkHome);
 
         // To override the Flink configuration
         overrideFlinkConfiguration(configuration, commandLine);
@@ -223,10 +226,12 @@ public class CliFrontend {
             return new Path(flinkHomeFromEnvVar);
         }
 
-        throw new IllegalArgumentException(
+        LOG.warn(
                 "Cannot find Flink home from either command line arguments \"--flink-home\" "
                         + "or the environment variable \"FLINK_HOME\". "
                         + "Please make sure Flink home is properly set. ");
+
+        return null;
     }
 
     private static Configuration getGlobalConfig(CommandLine commandLine) throws Exception {

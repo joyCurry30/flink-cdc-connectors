@@ -4,18 +4,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
+        <artifactId>flink-cdc-parent</artifactId>
         <groupId>org.apache.flink</groupId>
-        <artifactId>flink-cdc</artifactId>
-        <version>3.2-SNAPSHOT</version>
+        <version>${revision}</version>
     </parent>
 
     <artifactId>flink-cdc-example</artifactId>
-
-    <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
 
     <dependencies>
         <dependency>
