@@ -64,6 +64,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -113,7 +114,7 @@ public abstract class PipelineTestEnvironment extends TestLogger {
                             .withUsername("flinkuser")
                             .withPassword("flinkpw")
                             .withNetwork(NETWORK)
-                            .withNetworkAliases("mysql")
+                            .withNetworkAliases(INTER_CONTAINER_MYSQL_ALIAS)
                             .withLogConsumer(new Slf4jLogConsumer(LOG));
 
     // ------------------------------------------------------------------------------------------
@@ -136,9 +137,16 @@ public abstract class PipelineTestEnvironment extends TestLogger {
                     "parallelism.default: 4",
                     "execution.checkpointing.interval: 300",
                     "state.backend.type: hashmap",
-                    "env.java.opts.all: -Doracle.jdbc.timezoneAsRegion=false",
+                    "env.java.default-opts.all: --add-exports=java.base/sun.net.util=ALL-UNNAMED --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.text=ALL-UNNAMED --add-opens=java.base/java.time=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED --add-opens=java.base/jdk.internal.loader=ALL-UNNAMED --add-opens=java.base/java.security=ALL-UNNAMED --add-exports=java.base/sun.net.www=ALL-UNNAMED -Doracle.jdbc.timezoneAsRegion=false",
                     "execution.checkpointing.savepoint-dir: file:///opt/flink",
-                    "restart-strategy.type: off");
+                    "restart-strategy.type: off",
+                    "pekko.ask.timeout: 60s",
+                    // Set off-heap memory explicitly to avoid "java.lang.OutOfMemoryError: Direct
+                    // buffer memory" error.
+                    "taskmanager.memory.task.off-heap.size: 128mb",
+                    // Fix `java.lang.OutOfMemoryError: Metaspace. The metaspace out-of-memory error
+                    // has occurred` error.
+                    "taskmanager.memory.jvm-metaspace.size: 512mb");
     public static final String FLINK_PROPERTIES = String.join("\n", EXTERNAL_PROPS);
 
     @Nullable protected RestClusterClient<StandaloneClusterId> restClusterClient;
@@ -162,6 +170,10 @@ public abstract class PipelineTestEnvironment extends TestLogger {
         return flinkVersion;
     }
 
+    protected List<String> copyJarToFlinkLib() {
+        return Collections.emptyList();
+    }
+
     @BeforeEach
     public void before() throws Exception {
         LOG.info("Starting containers...");
@@ -175,6 +187,15 @@ public abstract class PipelineTestEnvironment extends TestLogger {
                         .withEnv("FLINK_PROPERTIES", FLINK_PROPERTIES)
                         .withCreateContainerCmdModifier(cmd -> cmd.withVolumes(sharedVolume))
                         .withLogConsumer(jobManagerConsumer);
+
+        List<String> jarToCopy = copyJarToFlinkLib();
+        if (!jarToCopy.isEmpty()) {
+            for (String jar : jarToCopy) {
+                jobManager.withCopyFileToContainer(
+                        MountableFile.forHostPath(TestUtils.getResource(jar)), "/opt/flink/lib/");
+            }
+        }
+
         Startables.deepStart(Stream.of(jobManager)).join();
         runInContainerAsRoot(jobManager, "chmod", "0777", "-R", sharedVolume.toString());
         LOG.info("JobManager is started.");
@@ -383,7 +404,10 @@ public abstract class PipelineTestEnvironment extends TestLogger {
     }
 
     protected String getFlinkDockerImageTag() {
-        return String.format("flink:%s-scala_2.12", flinkVersion);
+        if (System.getProperty("java.specification.version").equals("17")) {
+            return String.format("flink:%s-scala_2.12-java17", flinkVersion);
+        }
+        return String.format("flink:%s-scala_2.12-java11", flinkVersion);
     }
 
     private ExecResult executeAndCheck(GenericContainer<?> container, String... command) {
@@ -399,8 +423,15 @@ public abstract class PipelineTestEnvironment extends TestLogger {
             } else {
                 LOG.error(execResult.getStderr());
                 throw new AssertionError(
-                        "Failed when submitting the pipeline job. Exit code: "
-                                + execResult.getExitCode());
+                        "Failed when submitting the pipeline job.\n"
+                                + "Exit code: "
+                                + execResult.getExitCode()
+                                + "\n"
+                                + "StdOut: "
+                                + execResult.getStdout()
+                                + "\n"
+                                + "StdErr: "
+                                + execResult.getStderr());
             }
         } catch (Exception e) {
             throw new RuntimeException(
@@ -447,6 +478,12 @@ public abstract class PipelineTestEnvironment extends TestLogger {
         for (String event : expectedEvents) {
             waitUntilSpecificEvent(consumer, event);
         }
+    }
+
+    protected void validateResult(
+            ToStringConsumer consumer, Function<String, String> mapper, String... expectedEvents)
+            throws Exception {
+        validateResult(consumer, Stream.of(expectedEvents).map(mapper).toArray(String[]::new));
     }
 
     protected void waitUntilSpecificEvent(String event) throws Exception {
